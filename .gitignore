@@ -129,7 +129,7 @@ dmypy.json
 .pyre/
 
 # Credentials file
-.settings.ini
+settings.ini
 
 # HTML Telegram Chats
 results_*_html/
