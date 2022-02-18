@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Credentials file
+.secrets.py
+
+# HTML Telegram Chats
+results_*_html/
