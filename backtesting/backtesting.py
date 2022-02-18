@@ -41,6 +41,70 @@ conn = mt5.connected(path=r'../MoneyBox/bin/terminal64.exe',
 
 L1_TF = mt5.TIMEFRAME.M1
 
+def get_positions(path: str, ignore: list = None):
+    '''Gets positions data for all messages, including tp and sl updates
+    from following ones and close signals as well. (Includes anything
+    the interpreter module is able to parse)'''
+
+    msgs = clean_json(path)
+    if ignore is None:
+        ignore = []
+
+    positions = []
+    for msg in msgs.values():
+
+        try:
+            p = positions[-1]
+        except IndexError:
+            p = None
+
+        # calls the interpreter
+        data = interpret(msg['text'])
+        # if it's an order, add position
+        if data['flag'] == FLAG.ORDER:
+            log.debug(f'interpretation: {data}')
+            positions.append(
+                Position(msg['time'],
+                         msg['text'],
+                         data['symbol'],
+                         data['side'],
+                         data['sl'],
+                         entry=data['entry'],
+                         tp=data['tps']))
+        elif p is None:
+            continue
+
+        elif data['flag'] == FLAG.CLOSE:
+            p.add_order(
+                MarketOrder(msg['time'],
+                            SIDE(-p.side),
+                            name=LABEL.CLOSE,
+                            text=msg['text']))
+
+        elif data['flag'] == FLAG.BREAKEVEN:
+            p.add_order(
+                StopOrder(msg['time'],
+                          SIDE(-p.side),
+                          p.entry.price,
+                          name=LABEL.SL_TO_BE,
+                          text=msg['text']))
+
+        elif data['flag'] == FLAG.MOVE_SL and FLAG.MOVE_SL not in ignore:
+            p.add_order(
+                StopOrder(msg['time'],
+                          SIDE(-p.side),
+                          data['sl'],
+                          name=LABEL.MOVE_SL,
+                          text=msg['text']))
+
+        elif data['flag'] == FLAG.UPDATE_TP:
+            for tp in data['tps']:
+                p.add_order(TP(msg['time'], SIDE(-p.side), tp,
+                               text=msg['text']))
+
+    return positions
+
+
 
 def clean_json(json_path, tz_localize=pytz.timezone('Europe/Rome')):
     '''Takes in a messy json and cleans it to use it for backtesting'''
