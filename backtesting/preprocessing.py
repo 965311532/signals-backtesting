@@ -8,9 +8,8 @@ import arrow
 import logging
 
 logging.basicConfig()
-log = logging.getLogger('preprocessing')
+log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
-logging.getLogger('hermes').setLevel(logging.WARNING)
 
 class TelegramChatPreprocessor:
     def __init__(self, tz_messages=pytz.timezone("Europe/Rome")):
@@ -57,20 +56,23 @@ class TelegramChatPreprocessor:
             try:
                 new_piece['interpretation'] = hermes.interpret(piece.text)
                 result.append(new_piece)
-            except hermes.TooManyFeatures as e:
-                log.debug(f'{e=}')
+            except hermes.TooManyFeatures as error:
+                log.debug(f'{error=}')
                 continue
         return result
 
 def preprocess(json_path, tz_messages=pytz.timezone("Europe/Rome")):
     prep = TelegramChatPreprocessor()
     data = prep.prepare_json(json_path)
-    return prep.preprocess(data)
+    processed = prep.preprocess(data)
+    # this only keeps signals that have a flag
+    r = [{k:v for k,v in d.items()} for d in processed if 'flag' in d['interpretation']]
+    return r
 
 
 def main():
-    print(preprocess("../chats/results_daniel.json"))
-
+    prep = preprocess("../chats/results_daniel.json")
+    print(json.dumps(prep, indent=2, default=str))
 
 if __name__ == "__main__":
     main()

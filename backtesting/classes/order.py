@@ -1,68 +1,76 @@
 from constants import SIDE, ORDERTYPE, LABEL
+from typing import Union, Optional
+from price import Price
+from dataclasses import dataclass, field
+import arrow
+import logging
 
+logging.basicConfig()
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+
+
+class ExecutionAlreadySetError(AttributeError):
+    pass
+
+
+@dataclass
+class Execution:
+    time: arrow.Arrow
+    price: Price
+
+    def __lt__(self, other: 'Execution'):
+        if not isinstance(other, Execution):
+            log.warning(' < operation is only supported with another Execution instance')
+        return self.time < other.time
+
+
+@dataclass
 class Order:
+    time: arrow.Arrow
+    side: SIDE
+    ordertype: ORDERTYPE
+    price: Union[None, Price] = None
+    name: Union[None, LABEL] = None
+    execution: Union[None, Execution] = None
 
-    def __init__(self,
-                 time: datetime,
-                 side: SIDE,
-                 ordertype: ORDERTYPE,
-                 price: Union[float, str] = None,
-                 name: LABEL = None,
-                 text: str = None):
-
-        self.time = time  # time of placing the order
-        self.side = side  # buy, sell
-        self.ordertype = ordertype  # market, limit
-        self.price = price
-        self.name = name  # name of the order. Ex: TARGET.SL
-        self.text = text  # text that generated the order
-
-    def __repr__(self):
-        carr = "\n"
-        attrs = "side,ordertype,price,name,text,exe_time,exe_price".split(',')
-        return '{}(\n\t\t\ttime = {}\n\t\t\t{}\n\t\t\t)'.format(
-            type(self).__name__,
-            self.time.strftime('%Y-%m-%d %H:%M:%S %z'),
-            ',\n\t\t\t'.join([f'{x} = {re.sub(carr, " ", str(getattr(self, x, None))[:30])}' for x in attrs]))
-
-    @property
-    def price(self):
-        return self._price
-
-    @price.setter
-    def price(self, value):
-        '''Adds support for spelling errors, like 1:45345 or 145..890'''
-        if value is None:
-            self._price = None
-        else:
-            self._price = float(re.sub(r':|\.{1,2}', '.', str(value)))
+    def set_execution(self, time: arrow.Arrow, price: Price):
+        if self.execution is not None:
+            raise ExecutionAlreadySetError(self)
+        self.execution = Execution(time, price)
 
 
 class MarketOrder(Order):
-
-    def __init__(self, time: datetime, side: SIDE, **kwargs):
+    def __init__(self, time: arrow.Arrow, side: SIDE, **kwargs):
         super().__init__(time, side, ORDERTYPE.MARKET, **kwargs)
 
 
 class LimitOrder(Order):
-
-    def __init__(self, time: datetime, side: SIDE, price: float, **kwargs):
+    def __init__(self, time: arrow.Arrow, side: SIDE, price: Price, **kwargs):
         super().__init__(time, side, ORDERTYPE.LIMIT, price=price, **kwargs)
 
 
 class StopOrder(Order):
-
-    def __init__(self, time: datetime, side: SIDE, price: float, **kwargs):
+    def __init__(self, time: arrow.Arrow, side: SIDE, price: Price, **kwargs):
         super().__init__(time, side, ORDERTYPE.STOP, price=price, **kwargs)
 
 
 class SL(StopOrder):
-
-    def __init__(self, time: datetime, side: SIDE, price: float, **kwargs):
+    def __init__(self, time: arrow.Arrow, side: SIDE, price: Price, **kwargs):
         super().__init__(time, side, price=price, name=LABEL.SL, **kwargs)
 
 
 class TP(LimitOrder):
-
-    def __init__(self, time: datetime, side: SIDE, price: float, **kwargs):
+    def __init__(self, time: arrow.Arrow, side: SIDE, price: Price, **kwargs):
         super().__init__(time, side, price=price, name=LABEL.TP, **kwargs)
+
+
+def main():
+    sl = SL(arrow.now(), SIDE.BUY, Price(150.50, 0.001))
+    print(sl)
+    sl.set_execution(arrow.now(), Price(150.6, 0.001))
+    print(sl)
+
+
+if __name__ == "__main__":
+    main()

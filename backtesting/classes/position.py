@@ -1,143 +1,137 @@
-from constants import SIDE
-from typing import Union
+from dataclasses import dataclass, field
+from constants import SIDE, LABEL, ORDERTYPE
+from typing import Union, List
 import logging
+from order import Order, MarketOrder, LimitOrder, SL, TP
+from price import Price, Pips, candle_mean
+import arrow
+import betterMT5 as mt5
 
+logging.basicConfig()
+log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
+
+
+class PriceNotReasonableError(ValueError):
+    pass
+
+class UnreasonableOrderPlacementError(ValueError):
+    pass
+
+
+@dataclass
 class Position:
+    time: arrow.Arrow
+    symbol: Union[str, mt5.Symbol]
+    side: Union[str, SIDE]
+    entry_price: Union[str, float, None]
+    sl_price: Union[str, float]
+    tp_prices: List[Union[str, float]] = field(default_factory=list)
+    text: str = ""
 
-    def __init__(self,
-                 time: datetime,
-                 text: str,
-                 symbol: str,
-                 side: SIDE,
-                 sl: float,
-                 entry: Union[None, float] = None,
-                 tp: Union[float, list] = []):
+    def __post_init__(self):
 
-        self.log = logging.getLogger('signals_manipulation')
-        self.time = time
-        self.text = text
-        self.symbol = mt5.Symbol(symbol)
-        self.side = side
-        self.orders = []
+        # needed for orders management
+        self.orders = list()
 
-        # add entry
-        self.entry = self.add_entry(entry)
+        # enforces self.symbol type
+        if isinstance(self.symbol, str):
+            self.symbol = mt5.Symbol(self.symbol)
 
-        # adds stop loss order
-        self.sl = self.add_order(SL(time, SIDE(-self.side), sl, text=text))
+        # enforces self.side type
+        if isinstance(self.side, str):
+            self.side = SIDE.from_str(self.side)
 
-        try:  # adds tp order(s)
-            for target in tp:
-                self.add_order(TP(time, SIDE(-side), target, text=text))
-        except TypeError:
-            self.add_order(TP(time, SIDE(-side), tp, text=text))
+        # add entry order
+        self.entry = self.add_entry(self.entry_price)
 
-    def __repr__(self):
+        # adds stop loss and tp orders
+        tick_size = self.symbol.info.trade_tick_size
 
-        output = '{}(\n\ttime = {time},\n\tsymbol = {symbol},\n\tside = {side},\n\ttext = {text},\n\tresult = {result},\n\tentry = {entry},\n\torders = [\n'.format(
-            type(self).__name__,
-            time=self.time.strftime('%Y-%m-%d %H:%M:%S %z'),
-            symbol=self.symbol.name,
-            side=str(self.side),
-            text=re.sub("\n", " ", self.text),
-            result=getattr(self, 'result', None),
-            entry=self.entry)
-        
-        for o in self.get_orders(by='time'):
-            output += f'\t\t{o},\n'
-            
-        output = output[:-2] + '\n\t]\n)'
-        
-        return output
-    
-    def add_entry(self, entry: Union[None, float]):
-        '''Adds entry order'''
+        self.sl_price = Price(self.sl_price, tick_size)
+        self.sl = self.add_order(SL(self.time, SIDE(-self.side), self.sl_price))
 
-        if entry is None:
-            e = MarketOrder(self.time,
-                            self.side,
-                            name=LABEL.ENTRY,
-                            text=self.text)
+        enforced_tp_prices = list()
+        self.tps = list()
+        for tp in self.tp_prices:
+            tp_price = Price(tp, tick_size)
+            enforced_tp_prices.append(tp_price)
+            self.tps.append(self.add_order(TP(self.time, SIDE(-self.side), tp_price)))
+        self.tp_prices = enforced_tp_prices
+
+    def add_entry(self, price: Union[str, float, None]):
+        """Adds entry order"""
+
+        if price is None:
+
+            entry = MarketOrder(self.time, self.side, name=LABEL.ENTRY)
 
             # this is so that we don't have to do too many shenanigans with sl_to_be
-            sh = self.symbol.history(mt5.TIMEFRAME.M1,
-                                     datetime_from=self.time,
-                                     count=1)
+            sh = self.symbol.history(mt5.TIMEFRAME.M1, datetime_from=self.time, count=1)
 
-            e.exe_time = sh.loc[0, 'time']
-            e.exe_price = candle_mean(sh.iloc[0])
+            # sets execution so we don't have to look it up again later
+            tick_size = self.symbol.info.trade_tick_size
+            self.entry_price = Price(candle_mean(sh.iloc[0]), tick_size)
+            entry.price = self.entry_price
+            entry.set_execution(sh.loc[0, "time"], self.entry_price)
+            return entry
 
-        else:
-            e = LimitOrder(self.time,
-                           self.side,
-                           entry,
-                           name=LABEL.ENTRY,
-                           text=self.text)
-        return e
+        self.entry_price = Price(price, self.symbol.info.trade_tick_size)
+        return LimitOrder(self.time, self.side, self.entry_price, name=LABEL.ENTRY)
 
     def is_price_reasonable(self, order: Order):
+        """Checks that the order price is inside a 200 pips range from the
+        mean of all of the other order prices."""
 
         orders = [self.entry, *self.get_orders()]
-        prices = [o.price for o in orders if o.price is not None]
+        all_prices = [o.price.value for o in orders if o.price is not None]
+        prices = [p for p in all_prices if p is not None]
 
-        if order.ordertype == ORDERTYPE.LIMIT and order.price is None:
-            raise ValueError(
-                f'trying to add limit order without price {order=}')
-        
-        if order.name == LABEL.SL and self.side*(self.entry.price-order.price)<0: # sl is above/below entry ???
-            self.log.warning(f'Trying to add an incoherent SL ({order.time=})')
-            
-        if order.name == LABEL.TP and self.side*(order.price-self.entry.price)<0: # tp is below/above entry ???
-            self.log.warning(f'Trying to add an incoherent TP ({order.time=})')
-            return False
-
-        if order.ordertype != ORDERTYPE.MARKET and order.price is not None:
-
-            # checks for validity (must be in reasonable range, this is 200-250 pips)
-            if not (order.price * 0.985 < mean(prices) < 1.015 * order.price):
-                new_price = self.fix_price(order.price)
-
-                if not (new_price * 0.985 < mean(prices) < 1.015 * new_price):
-                    return False
-
-                order.price = new_price
+        if order.price is not None:
+            avg_p = sum(prices) / len(prices)
+            pips_range = Pips(150, self.symbol.info.trade_tick_size)
+            if not abs(order.price.value - avg_p) < pips_range.value:
+                return False
 
         return True
 
-    def fix_price(self, price: float):
-        '''Tries to fix common mistakes (500 instead of 150.500)'''
-        orders = [self.entry, *self.get_orders()]
-        prices = [o.price for o in orders if o.price is not None]
-
-        delta_array = []
-        tick_size = self.symbol.info.trade_tick_size
-
-        for og_p in prices:  # _p here stands for price
-
-            right_p, left_p = math.modf(og_p)  # 150.500 = 150, 500
-            new_p = left_p + price * tick_size  # multiplies 500 by tick size = 0.5
-            #log.debug(f'{new_p=}')
-            #pips100 = 1000 * tick_size
-            delta_array.append((new_p, abs(new_p - og_p)))
-
-        #log.debug(f'{delta_array=}')
-        return sorted(delta_array, key=lambda x: x[1])[0][0]
+    def is_placement_reasonable(self, order: Order):
+        """Checks whether the placement of the order (SL and TP) makes sense
+        compared to the entry (SL MUST be before entry in a long)"""
+        if self.side * (order.price - self.entry.price) < 0:
+            if order.name == LABEL.TP:
+                return False
+            return True
+        if order.name == LABEL.SL:
+            return False
+        return True
 
     def add_order(self, order: Order):
 
-        if self.is_price_reasonable(order):
-            self.orders.append(order)
-            return order
-        log.error(f'Order price is not valid! {order=}')
+        if not self.is_price_reasonable(order):
+            raise PriceNotReasonableError(order)
+        if not self.is_placement_reasonable(order):
+            raise UnreasonableOrderPlacementError(order)
+        self.orders.append(order)
+        return order
 
-    def get_orders(self, by='time'):
-        present_orders = [
-            o for o in self.orders if getattr(o, by, None) is not None
-        ]
+    def get_orders(self, by="time"):
+        present_orders = [o for o in self.orders if getattr(o, by, None) is not None]
         return sorted(present_orders, key=lambda x: getattr(x, by))
 
-    def remove_orders(self, label: LABEL):
-        # removes orders with specified label
-        for i, o in enumerate(self.orders):
-            if o.name == label:
-                self.orders.pop(i)
+
+def main():
+    with mt5.connected():
+        p1 = Position(
+            arrow.get(2022, 2, 17), "EURUSD", "buys", None, 1.1355, [1.1380, 1.1390], "test"
+        )
+        print(f"{p1=}")
+
+        p1.tps[0].set_execution(arrow.get(2022,2,17,2), Price(1.1381, 0.00001))
+        p1.tps[1].set_execution(arrow.get(2022,2,17,1), Price(1.13905, 0.00001))
+
+        print(f'{p1.get_orders("execution")=}')
+
+
+if __name__ == "__main__":
+    main()
