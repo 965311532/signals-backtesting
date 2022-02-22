@@ -263,8 +263,9 @@ class Backtest:
         return self.make_results(self.run_results)
 
     @staticmethod
-    def _determine_position_result(p: Position, partials=[1]):
+    def _determine_position_result(p: Position, partials: List[float], ignore: List[str]):
         events = p.get_orders(by="execution")
+        events = [e for e in events if str(e.name.name) not in ignore]
         
         if len(events) == 0:
             last_candle = p.rates.iloc[-1]
@@ -293,19 +294,26 @@ class Backtest:
 
         return (close, result, result_type)
 
-    def make_results(self, given=None, partials=[1]):
+    def make_results(self, given=None, partials: List[float] = None, ignore: List[str] = None):
         '''Returns a dataframe containing data from the test run provided'''
         if given is None:
             given = self.run_results
 
+        if partials is None:
+            partials = list(1)
+        
+        if ignore is None:
+            ignore = list()
+
         results = list()
         for p in given:
-            res = Backtest._determine_position_result(p, partials=partials)
+            res = Backtest._determine_position_result(p, partials=partials, ignore=ignore)
             results.append(
                 dict(
                     open=p.time,
                     close=res[0],
                     symbol=p.symbol.name,
+                    side=p.side.name,
                     sl_pips=p.sl_delta/p.symbol.info.trade_tick_size/10,
                     result=res[1],
                     type=res[2]
