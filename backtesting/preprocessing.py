@@ -57,7 +57,7 @@ class TelegramChatPreprocessor:
                 new_piece['interpretation'] = hermes.interpret(piece.text)
                 result.append(new_piece)
             except hermes.TooManyFeatures as error:
-                log.debug(f'{error=}')
+                log.warning(f'{error=}')
                 continue
         return result
 

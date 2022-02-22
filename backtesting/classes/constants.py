@@ -9,6 +9,7 @@ class SIDE(IntEnum):
 
     @classmethod
     def from_str(cls, value: str):
+        value = value.lower()
         if 'buy' in value or 'long' in value:
             return cls.BUY
         elif 'sell' in value or 'short' in value: 
@@ -31,3 +32,4 @@ class LABEL(IntEnum):
     BREAKEVEN = auto()
     MOVE_SL = auto()
     SL_TO_BE = auto()
+    PARTIALS = auto()

@@ -1,11 +1,12 @@
 from dataclasses import dataclass, field
-from constants import SIDE, LABEL, ORDERTYPE
+from .constants import SIDE, LABEL, ORDERTYPE
 from typing import Union, List
 import logging
-from order import Order, MarketOrder, LimitOrder, SL, TP
-from price import Price, Pips, candle_mean
+from .order import Order, MarketOrder, LimitOrder, SL, TP
+from .price import Price, Pips, candle_mean
 import arrow
 import betterMT5 as mt5
+from datetime import timedelta
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -16,6 +17,9 @@ class PriceNotReasonableError(ValueError):
     pass
 
 class UnreasonableOrderPlacementError(ValueError):
+    pass
+
+class PositionInitMissingDataError(ValueError):
     pass
 
 
@@ -58,6 +62,26 @@ class Position:
             enforced_tp_prices.append(tp_price)
             self.tps.append(self.add_order(TP(self.time, SIDE(-self.side), tp_price)))
         self.tp_prices = enforced_tp_prices
+    
+    @classmethod
+    def from_dict(cls, data: dict):
+        if (not ('time' in data) or 
+            not (all([attr in data['interpretation'] for attr in 'symbol side sl'.split(' ')]))):
+            raise PositionInitMissingDataError(data)
+
+        tp_get = data['interpretation'].get('tp')
+        tps = [tp_get]
+        if isinstance(tp_get, list):
+            tps = tp_get
+
+        return cls(
+            time=arrow.get(data['time']),
+            symbol=data['interpretation']['symbol'],
+            side=data['interpretation']['side'],
+            entry_price=data['interpretation'].get('entry'),
+            sl_price=data['interpretation']['sl'],
+            tp_prices=[tp for tp in tps if tp is not None],
+            text=data.get('text', ''))
 
     def add_entry(self, price: Union[str, float, None]):
         """Adds entry order"""
@@ -98,6 +122,8 @@ class Position:
     def is_placement_reasonable(self, order: Order):
         """Checks whether the placement of the order (SL and TP) makes sense
         compared to the entry (SL MUST be before entry in a long)"""
+        if order.price is None:
+            return True
         if self.side * (order.price - self.entry.price) < 0:
             if order.name == LABEL.TP:
                 return False
@@ -108,6 +134,11 @@ class Position:
 
     def add_order(self, order: Order):
 
+        if order.time - self.time > timedelta(hours=24):
+            log.warning(f'order is over 24 hours after the position was opened')
+        if order in self.get_orders():
+            log.warning(f'duplicate order')
+            return None
         if not self.is_price_reasonable(order):
             raise PriceNotReasonableError(order)
         if not self.is_placement_reasonable(order):
@@ -130,7 +161,16 @@ def main():
         p1.tps[0].set_execution(arrow.get(2022,2,17,2), Price(1.1381, 0.00001))
         p1.tps[1].set_execution(arrow.get(2022,2,17,1), Price(1.13905, 0.00001))
 
-        print(f'{p1.get_orders("execution")=}')
+        print(f'\n{p1.get_orders("execution")=}')
+
+        data = {
+            'time': arrow.now(),
+            'symbol': 'GBPJPY',
+            'entry': 150.5,
+            'side': 'longs!!',
+            'sl': '150.1'}
+
+        print(f'\n{Position.from_dict(data)}')
 
 
 if __name__ == "__main__":

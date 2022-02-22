@@ -1,6 +1,6 @@
-from constants import SIDE, ORDERTYPE, LABEL
+from .constants import SIDE, ORDERTYPE, LABEL
 from typing import Union, Optional
-from price import Price
+from .price import Price
 from dataclasses import dataclass, field
 import arrow
 import logging
@@ -27,17 +27,30 @@ class Execution:
 
 @dataclass
 class Order:
-    time: arrow.Arrow
+    time: Union[arrow.Arrow, 'datetimelike']
     side: SIDE
     ordertype: ORDERTYPE
     price: Union[None, Price] = None
     name: Union[None, LABEL] = None
     execution: Union[None, Execution] = None
 
-    def set_execution(self, time: arrow.Arrow, price: Price):
+    def __post_init__(self):
+        if not isinstance(self.time, arrow.Arrow):
+            self.time = arrow.get(self.time)
+
+    def set_execution(self, time: 'datetimelike', price: Price):
         if self.execution is not None:
             raise ExecutionAlreadySetError(self)
-        self.execution = Execution(time, price)
+        self.execution = Execution(arrow.get(time), price)
+
+    def __eq__(self, other: 'Order'):
+        '''This allows to check for order already there in Position.get_orders()'''
+        if (self.time == other.time and # might have to delete this
+            self.side == other.side and
+            self.ordertype == other.ordertype and
+            self.price == other.price):
+            return True
+        return False
 
 
 class MarketOrder(Order):
