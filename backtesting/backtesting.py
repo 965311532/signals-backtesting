@@ -29,7 +29,7 @@ from .classes.position import (
 )
 from .classes.constants import SIDE, LABEL, ORDERTYPE
 from .classes.price import Price, Pips, candle_mean
-from typing import Union, List
+from typing import Union, List, Optional
 import arrow
 from datetime import timedelta
 
@@ -115,7 +115,7 @@ def get_pos_eop(time, end_of_period=0, end_of_day="18:30"):
     return day_end if end_of_period == 0 else weekly
 
 
-def make_positions(prep_data: List[dict]):
+def make_positions(prep_data: List[dict]) -> list:
     """Gets positions data for all messages, including tp and sl updates
     from following ones and close signals as well. (Includes anything
     the interpreter module is able to parse)"""
@@ -172,7 +172,7 @@ def make_positions(prep_data: List[dict]):
 
 
 class Backtest:
-    def __init__(self, path: str, verbose=False):
+    def __init__(self, path: Optional[str] = None, verbose=False):
 
         # SETS LOGGING LEVELS
         modules = [
@@ -190,9 +190,13 @@ class Backtest:
             elif not verbose:
                 logging.getLogger(mod).setLevel(logging.INFO)
 
-        self.trades = self.prepare(path)
+        if path:
+            self.trades = self.prepare(path)
+        else:
+            self.trades = []
 
-    def prepare(self, path: str):
+
+    def prepare(self, path: str) -> list:
         relevant_signals = preprocessing.preprocess(path)
         return make_positions(relevant_signals)
 
@@ -300,7 +304,7 @@ class Backtest:
             given = self.run_results
 
         if partials is None:
-            partials = list(1)
+            partials = [1]
         
         if ignore is None:
             ignore = list()
